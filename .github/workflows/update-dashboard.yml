@@ -1,4 +1,4 @@
-          Update Edge 1st dashboard
+name: Update Edge 1st dashboard
 
 on:
   workflow_dispatch:
