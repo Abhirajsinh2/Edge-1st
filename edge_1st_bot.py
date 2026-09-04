@@ -32,7 +32,7 @@ import sys
 import time as _time
 import webbrowser
 from dataclasses import dataclass
-from datetime import datetime as _dt
+from datetime import datetime as _dt, timedelta as _td
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -233,6 +233,50 @@ def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
 
 # ── reporting ────────────────────────────────────────────────────────────
 
+def _agg(trades: list) -> dict:
+    """P&L aggregation from a plain trade list -- no account/equity involved,
+    so it works the same whether given a whole window or one week's slice."""
+    n = len(trades)
+    if n == 0:
+        return {"trades": 0, "win_rate": 0.0, "gross": 0.0, "charges": 0.0, "net": 0.0}
+    wins = sum(1 for t in trades if t["net_pnl_inr"] > 0)
+    return {
+        "trades": n,
+        "win_rate": wins / n * 100,
+        "gross": sum(t["pnl_inr"] for t in trades),
+        "charges": sum(t["total_charges"] for t in trades),
+        "net": sum(t["net_pnl_inr"] for t in trades),
+    }
+
+
+def _week_start(d):
+    """Monday of the ISO week containing date d (d is a date, not datetime)."""
+    return d - _td(days=d.weekday())
+
+
+def classify_weekly(all_trades: dict, syms: list, max_weeks: int = 4) -> list:
+    """Bucket every symbol's trades into ISO calendar weeks (Mon-Sun), most
+    recent week first, capped at max_weeks. Each bucket carries a combined
+    total plus a per-symbol breakdown, using the same _agg() as the overall
+    window summary so the numbers are directly comparable."""
+    flat = [t for trs in all_trades.values() for t in trs]
+    by_week: dict = {}
+    for t in flat:
+        by_week.setdefault(_week_start(t["date"]), []).append(t)
+
+    weeks = []
+    for ws in sorted(by_week.keys(), reverse=True)[:max_weeks]:
+        wk_trades = by_week[ws]
+        weeks.append({
+            "week_start": ws,
+            "week_end": ws + _td(days=6),
+            "total": _agg(wk_trades),
+            "per_symbol": {sym: _agg([t for t in wk_trades if t["instrument"] == sym]) for sym in syms},
+            "trades": sorted(wk_trades, key=lambda t: t["exit_time"]),
+        })
+    return weeks
+
+
 def summarize(symbol: str, trades: list, account: CapitalAccount) -> dict:
     n = len(trades)
     if n == 0:
@@ -273,43 +317,71 @@ def write_csv(symbol: str, trades: list):
     return path
 
 
-def write_dashboard(rows: list, all_trades: dict, window_desc: str):
-    def fmt(v): return f"{v:+,.0f}"
-    cards = ""
-    for r in rows:
-        col = "#43D9AD" if r["net"] >= 0 else "#f7768e"
-        cards += (f"<div class=card><h2>{r['instrument']}</h2>"
-                  f"<div class=big style='color:{col}'>Rs {fmt(r['net'])}</div>"
-                  f"<div class=sub>{r['trades']} trades · {r['win_rate']:.0f}% win · "
-                  f"gross Rs {fmt(r['gross'])} · charges Rs {r['charges']:,.0f}</div></div>")
-    trows = ""
-    for sym, trs in all_trades.items():
-        for t in trs:
-            col = "#43D9AD" if t["net_pnl_inr"] >= 0 else "#f7768e"
-            trows += (f"<tr><td>{sym}</td><td>{t['direction']}</td>"
-                      f"<td>{t['entry_time']}</td><td>{t['entry_price']}</td>"
-                      f"<td>{t['exit_time']}</td><td>{t['exit_price']}</td>"
-                      f"<td>{t['exit_reason']}</td><td>{t['quantity']}</td>"
-                      f"<td style='color:{col}'>{t['net_pnl_inr']:+,.0f}</td></tr>")
+def _fmt(v) -> str:
+    return f"{v:+,.0f}"
+
+
+def _card_html(label: str, agg: dict) -> str:
+    col = "#43D9AD" if agg["net"] >= 0 else "#f7768e"
+    return (f"<div class=card><h2>{label}</h2>"
+            f"<div class=big style='color:{col}'>Rs {_fmt(agg['net'])}</div>"
+            f"<div class=sub>{agg['trades']} trades · {agg['win_rate']:.0f}% win · "
+            f"gross Rs {_fmt(agg['gross'])} · charges Rs {agg['charges']:,.0f}</div></div>")
+
+
+def _trade_rows_html(trades: list) -> str:
+    rows = ""
+    for t in trades:
+        col = "#43D9AD" if t["net_pnl_inr"] >= 0 else "#f7768e"
+        rows += (f"<tr><td>{t['instrument']}</td><td>{t['direction']}</td>"
+                 f"<td>{t['entry_time']}</td><td>{t['entry_price']}</td>"
+                 f"<td>{t['exit_time']}</td><td>{t['exit_price']}</td>"
+                 f"<td>{t['exit_reason']}</td><td>{t['quantity']}</td>"
+                 f"<td style='color:{col}'>{t['net_pnl_inr']:+,.0f}</td></tr>")
+    return rows
+
+
+def _trade_table_html(trades: list) -> str:
+    if not trades:
+        return "<p style='color:#8b949e;font-size:.85rem'>No trades this week.</p>"
+    return (f"<table><tr><th>Sym</th><th>Dir</th><th>Entry time</th><th>Entry</th>"
+            f"<th>Exit time</th><th>Exit</th><th>Reason</th><th>Qty</th><th>Net Rs</th></tr>"
+            f"{_trade_rows_html(trades)}</table>")
+
+
+def write_dashboard(rows: list, all_trades: dict, window_desc: str, weekly: list = None):
+    weekly = weekly or []
+    total_cards = "".join(_card_html(r["instrument"], r) for r in rows)
+
+    week_sections = ""
+    for wk in weekly:
+        heading = f"Week of {wk['week_start']:%b %d} &ndash; {wk['week_end']:%b %d}"
+        wk_cards = "".join(_card_html(sym, agg) for sym, agg in wk["per_symbol"].items())
+        wk_cards += _card_html("Combined", wk["total"])
+        week_sections += (
+            f"<h2 style='color:#8b949e;font-size:1rem;margin-top:32px'>{heading}</h2>"
+            f"<div class=cards>{wk_cards}</div>"
+            f"{_trade_table_html(wk['trades'])}"
+        )
+
     html = f"""<!doctype html><html><head><meta charset=UTF-8>
-<title>Edge 1st — weekly</title><style>
+<title>Edge 1st — last 4 weeks</title><style>
 body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:24px}}
 h1{{margin:0 0 4px}} .meta{{color:#8b949e;margin-bottom:20px;font-size:.9rem}}
-.cards{{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:24px}}
-.card{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px 20px;min-width:260px}}
+.cards{{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}}
+.card{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px 20px;min-width:220px}}
 .card h2{{margin:0 0 8px;font-size:1rem;color:#8b949e}}
 .big{{font-size:1.8rem;font-weight:700}} .sub{{color:#8b949e;font-size:.8rem;margin-top:6px}}
-table{{width:100%;border-collapse:collapse;font-size:.82rem}}
+table{{width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:8px}}
 th,td{{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d}} th{{color:#8b949e}}
 </style></head><body>
-<h1>Edge 1st &mdash; weekly paper run</h1>
+<h1>Edge 1st &mdash; last 4 weeks</h1>
 <div class=meta>First Edge strategy (archived Strategy 5) &middot; 1-minute exit model &middot;
 full Zerodha F&amp;O costs &middot; {window_desc} &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
 paper only, no real orders</div>
-<div class=cards>{cards}</div>
-<h2 style='color:#8b949e;font-size:1rem'>All trades</h2>
-<table><tr><th>Sym</th><th>Dir</th><th>Entry time</th><th>Entry</th><th>Exit time</th>
-<th>Exit</th><th>Reason</th><th>Qty</th><th>Net Rs</th></tr>{trows}</table>
+<h2 style='color:#8b949e;font-size:1rem'>Last 4 weeks &mdash; total</h2>
+<div class=cards>{total_cards}</div>
+{week_sections}
 </body></html>"""
     path = "edge_1st_dashboard.html"
     with open(path, "w", encoding="utf-8") as f:
@@ -320,14 +392,21 @@ paper only, no real orders</div>
 # ── entrypoints ──────────────────────────────────────────────────────────
 
 def run_week(only_symbol: str = None, days: int = None):
+    # The dashboard is intentionally a rolling recent-weeks view. Keep an
+    # accidental larger CLI value from pulling/displaying older history.
+    days = config.INTRADAY_LOOKBACK_DAYS if days is None else min(max(int(days), 1), config.INTRADAY_LOOKBACK_DAYS)
     syms = [only_symbol] if only_symbol else list(config.INSTRUMENTS)
     rows, all_trades = [], {}
     win_lo = win_hi = None
     for sym in syms:
-        print(f"\nfetching last {days or config.INTRADAY_LOOKBACK_DAYS} days of 1-min {sym} ...")
+        print(f"\nfetching last {days} days of 1-min {sym} ...")
         df = market.get_week_1min(sym, days)
         if df.empty:
-            print(f"  {sym}: no data returned from Yahoo (throttled or market holiday week).")
+            print(f"  {sym}: no data returned (throttled, holiday, or feed unavailable).")
+            # Replace any prior artifact so the published view cannot show an
+            # older window's trades when this run's feed is empty.
+            write_csv(sym, [])
+            all_trades[sym] = []
             continue
         w0, w1 = df.index.min(), df.index.max()
         win_lo = w0 if win_lo is None else min(win_lo, w0)
@@ -341,6 +420,8 @@ def run_week(only_symbol: str = None, days: int = None):
 
     if not rows:
         print("\nNothing to report.")
+        dash = write_dashboard([], all_trades, f"last {days} calendar days (no trades)")
+        print(f"\nwrote {dash} (no trades in the recent window)")
         return
 
     tot_g = sum(r["gross"] for r in rows)
@@ -348,12 +429,18 @@ def run_week(only_symbol: str = None, days: int = None):
     tot_n = sum(r["net"] for r in rows)
     tot_t = sum(r["trades"] for r in rows)
     print("\n" + "=" * 64)
-    print(f"  EDGE 1ST — WEEK TOTAL ({tot_t} trades)")
+    print(f"  EDGE 1ST — LAST {days} DAYS TOTAL ({tot_t} trades)")
     print(f"  gross Rs {tot_g:+,.0f}   charges Rs {tot_c:,.0f}   NET Rs {tot_n:+,.0f}")
     print("=" * 64)
 
-    desc = f"{win_lo:%Y-%m-%d} to {win_hi:%Y-%m-%d}" if win_lo is not None else "last week"
-    dash = write_dashboard(rows, all_trades, desc)
+    weekly = classify_weekly(all_trades, syms, max_weeks=4)
+    for wk in weekly:
+        t = wk["total"]
+        print(f"  week {wk['week_start']:%Y-%m-%d} - {wk['week_end']:%Y-%m-%d}: "
+              f"{t['trades']} trades, NET Rs {t['net']:+,.0f}")
+
+    desc = f"{win_lo:%Y-%m-%d} to {win_hi:%Y-%m-%d}" if win_lo is not None else f"last {days} calendar days"
+    dash = write_dashboard(rows, all_trades, desc, weekly=weekly)
     print(f"\nwrote {dash}  +  edge_1st_trades_<SYM>.csv")
     if os.getenv("EDGE1ST_NO_BROWSER") != "1":
         try:

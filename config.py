@@ -66,6 +66,12 @@ MARKET_TZ = "Asia/Kolkata"
 MARKET_OPEN = "09:15"
 MARKET_CLOSE = "15:30"
 
-# --- how much market history the weekly run pulls ---
-INTRADAY_LOOKBACK_DAYS = 7     # Yahoo hard-caps 1-minute data at 7 calendar days
+# --- how much market history the run pulls ---
+# 28 days = last 4 calendar weeks, classified weekly on the dashboard.
+# Upstox's historical-candle API (the default DATA_SOURCE) has no such cap and
+# serves index candles anonymously; if it's unavailable and this falls back to
+# Yahoo, note Yahoo hard-caps 1-minute data at 7 calendar days, so a fallback
+# run will silently cover less history than requested -- not an error, just
+# fewer weeks on the dashboard until Upstox is reachable again.
+INTRADAY_LOOKBACK_DAYS = 28
 POLL_INTERVAL_SECONDS = 30     # live mode only
