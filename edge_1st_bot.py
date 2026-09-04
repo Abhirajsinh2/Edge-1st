@@ -91,7 +91,90 @@ class Position:
 
 def _resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     rule = f"{minutes}min"
-    out = pd.concat                    points_today += pts
+    out = pd.concat([
+        df["open"].resample(rule).first(), df["high"].resample(rule).max(),
+        df["low"].resample(rule).min(), df["close"].resample(rule).last(),
+        df["volume"].resample(rule).sum(),
+    ], axis=1)
+    out.columns = ["open", "high", "low", "close", "volume"]
+    return out.dropna()
+
+
+def _entries_allowed(ts) -> bool:
+    return (ts.hour * 60 + ts.minute) >= _OPEN_MIN + config.NO_TRADE_MINUTES_AFTER_OPEN
+
+
+def _costs(direction: str, entry: float, exit_: float, qty: int) -> dict:
+    if direction == "LONG":
+        return calculate_futures_costs(buy_price=entry, sell_price=exit_, qty=qty)
+    return calculate_futures_costs(buy_price=exit_, sell_price=entry, qty=qty)
+
+
+# ── core: 1-minute-exit replay over one instrument's week ──────────────────
+
+def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
+                prev_ohlc_map: dict) -> list:
+    lot_size = config.LOT_SIZES.get(symbol, 1)
+    df_1m = df_1m.sort_index()
+    df_entry_full = _resample(df_1m, config.ENTRY_TIMEFRAME_MIN)
+    df_ref_full = _resample(df_1m, config.REFERENCE_TIMEFRAME_MIN)
+    daily = df_1m.resample("1D").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+    entry_min = config.ENTRY_TIMEFRAME_MIN
+    session_dates = sorted(set(df_1m.index.date))
+
+    trades: list = []
+    for day_idx, day in enumerate(session_dates):
+        prev = prev_ohlc_map.get(day)
+        if prev is None:
+            drows = daily[daily.index.date < day]
+            if drows.empty:
+                continue
+            pr = drows.iloc[-1]
+            prev = {"high": float(pr["high"]), "low": float(pr["low"]), "close": float(pr["close"])}
+
+        day_bars = df_1m[df_1m.index.date == day]
+        if day_bars.empty:
+            continue
+
+        open_pos = None
+        trades_today = 0
+        points_today = 0.0
+
+        for ts in day_bars.index:
+            bar = df_1m.loc[ts]
+
+            # ---- manage an open position against THIS 1-minute bar ----
+            if open_pos is not None:
+                reason = None
+                if open_pos.direction == "LONG":
+                    if bar["low"] <= open_pos.stop_loss:
+                        reason = "SL"
+                    elif bar["high"] >= open_pos.take_profit:
+                        reason = "TP"
+                else:
+                    if bar["high"] >= open_pos.stop_loss:
+                        reason = "SL"
+                    elif bar["low"] <= open_pos.take_profit:
+                        reason = "TP"
+
+                if reason is None:
+                    pos_e = df_entry_full.index.searchsorted(ts, side="right")
+                    de = df_entry_full.iloc[max(0, pos_e - ENTRY_LOOKBACK_BARS):pos_e]
+                    if len(de) and strat.should_exit_early(de, open_pos.direction):
+                        reason = "EARLY_EXIT"
+
+                if reason is not None:
+                    exit_price = (open_pos.stop_loss if reason == "SL"
+                                  else open_pos.take_profit if reason == "TP"
+                                  else float(bar["close"]))
+                    pts = ((exit_price - open_pos.entry_price) if open_pos.direction == "LONG"
+                           else (open_pos.entry_price - exit_price))
+                    qty = open_pos.quantity
+                    gross = pts * qty
+                    c = _costs(open_pos.direction, open_pos.entry_price, exit_price, qty)
+                    net = gross - c["total_charges"]
+                    points_today += pts
                     eq_before = account.equity
                     withdrew = account.book_trade(net, c["total_charges"])
                     trades.append({
@@ -162,7 +245,70 @@ def summarize(symbol: str, trades: list, account: CapitalAccount) -> dict:
     net = sum(t["net_pnl_inr"] for t in trades)
     days = len({t["date"] for t in trades})
     reasons = {}
-    for t in trades<table><tr><th>Sym</th><th>Dir</th><th>Entry time</th><th>Entry</th><th>Exit time</th>
+    for t in trades:
+        reasons[t["exit_reason"]] = reasons.get(t["exit_reason"], 0) + 1
+    s = account.snapshot()
+    cost_note = f"   ({charges / gross:.2f}x gross)" if gross else ""
+    wd_note = f", withdrew Rs {s['withdrawn']:,.0f}" if s["withdrawal_done"] else ""
+    print(f"\n  -- {symbol} --------------------------------------------------")
+    print(f"  trades         : {n}  over {days} trading day(s)")
+    print(f"  win rate       : {wins / n * 100:.1f}%   ({wins}W / {n - wins}L)")
+    print(f"  exits          : {reasons}")
+    print(f"  gross P&L      : Rs {gross:+,.0f}")
+    print(f"  total charges  : Rs {charges:,.0f}{cost_note}")
+    print(f"  NET P&L        : Rs {net:+,.0f}")
+    print(f"  ending equity  : Rs {s['equity']:,.0f}   (start Rs {s['initial']:,.0f}{wd_note})")
+    print(f"  return on stake: {s['return_pct']:+.1f}%")
+    return {"instrument": symbol, "trades": n, "win_rate": wins / n * 100,
+            "gross": gross, "charges": charges, "net": net, "days": days}
+
+
+def write_csv(symbol: str, trades: list):
+    path = f"edge_1st_trades_{symbol}.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        w.writeheader()
+        for t in trades:
+            w.writerow(t)
+    return path
+
+
+def write_dashboard(rows: list, all_trades: dict, window_desc: str):
+    def fmt(v): return f"{v:+,.0f}"
+    cards = ""
+    for r in rows:
+        col = "#43D9AD" if r["net"] >= 0 else "#f7768e"
+        cards += (f"<div class=card><h2>{r['instrument']}</h2>"
+                  f"<div class=big style='color:{col}'>Rs {fmt(r['net'])}</div>"
+                  f"<div class=sub>{r['trades']} trades · {r['win_rate']:.0f}% win · "
+                  f"gross Rs {fmt(r['gross'])} · charges Rs {r['charges']:,.0f}</div></div>")
+    trows = ""
+    for sym, trs in all_trades.items():
+        for t in trs:
+            col = "#43D9AD" if t["net_pnl_inr"] >= 0 else "#f7768e"
+            trows += (f"<tr><td>{sym}</td><td>{t['direction']}</td>"
+                      f"<td>{t['entry_time']}</td><td>{t['entry_price']}</td>"
+                      f"<td>{t['exit_time']}</td><td>{t['exit_price']}</td>"
+                      f"<td>{t['exit_reason']}</td><td>{t['quantity']}</td>"
+                      f"<td style='color:{col}'>{t['net_pnl_inr']:+,.0f}</td></tr>")
+    html = f"""<!doctype html><html><head><meta charset=UTF-8>
+<title>Edge 1st — weekly</title><style>
+body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:24px}}
+h1{{margin:0 0 4px}} .meta{{color:#8b949e;margin-bottom:20px;font-size:.9rem}}
+.cards{{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:24px}}
+.card{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px 20px;min-width:260px}}
+.card h2{{margin:0 0 8px;font-size:1rem;color:#8b949e}}
+.big{{font-size:1.8rem;font-weight:700}} .sub{{color:#8b949e;font-size:.8rem;margin-top:6px}}
+table{{width:100%;border-collapse:collapse;font-size:.82rem}}
+th,td{{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d}} th{{color:#8b949e}}
+</style></head><body>
+<h1>Edge 1st &mdash; weekly paper run</h1>
+<div class=meta>First Edge strategy (archived Strategy 5) &middot; 1-minute exit model &middot;
+full Zerodha F&amp;O costs &middot; {window_desc} &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
+paper only, no real orders</div>
+<div class=cards>{cards}</div>
+<h2 style='color:#8b949e;font-size:1rem'>All trades</h2>
+<table><tr><th>Sym</th><th>Dir</th><th>Entry time</th><th>Entry</th><th>Exit time</th>
 <th>Exit</th><th>Reason</th><th>Qty</th><th>Net Rs</th></tr>{trows}</table>
 </body></html>"""
     path = "edge_1st_dashboard.html"
@@ -174,9 +320,6 @@ def summarize(symbol: str, trades: list, account: CapitalAccount) -> dict:
 # ── entrypoints ──────────────────────────────────────────────────────────
 
 def run_week(only_symbol: str = None, days: int = None):
-    # The dashboard is intentionally a rolling recent-week view.  Keep an
-    # accidental larger CLI value from pulling/displaying older history.
-    days = config.INTRADAY_LOOKBACK_DAYS if days is None else min(max(int(days), 1), config.INTRADAY_LOOKBACK_DAYS)
     syms = [only_symbol] if only_symbol else list(config.INSTRUMENTS)
     rows, all_trades = [], {}
     win_lo = win_hi = None
@@ -185,10 +328,6 @@ def run_week(only_symbol: str = None, days: int = None):
         df = market.get_week_1min(sym, days)
         if df.empty:
             print(f"  {sym}: no data returned from Yahoo (throttled or market holiday week).")
-            # Replace any prior artifact so the published view cannot show an
-            # older week's trades when this week's feed is empty.
-            write_csv(sym, [])
-            all_trades[sym] = []
             continue
         w0, w1 = df.index.min(), df.index.max()
         win_lo = w0 if win_lo is None else min(win_lo, w0)
@@ -202,8 +341,6 @@ def run_week(only_symbol: str = None, days: int = None):
 
     if not rows:
         print("\nNothing to report.")
-        dash = write_dashboard([], all_trades, f"last {days} calendar days (no trades)")
-        print(f"\nwrote {dash} (no trades in the recent-week window)")
         return
 
     tot_g = sum(r["gross"] for r in rows)
