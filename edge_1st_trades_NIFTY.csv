@@ -1,0 +1,2 @@
+date,instrument,direction,entry_time,entry_price,exit_time,exit_price,exit_reason,quantity,points,pnl_inr,brokerage,stt,exchange_txn_charges,sebi_charges,stamp_duty,gst,total_charges,net_pnl_inr,equity_before,equity_after,withdrawn_to_date,withdrawal_here
+2026-09-03,NIFTY,LONG,2026-09-03 11:25:00+05:30,23952.55,2026-09-03 12:00:00+05:30,23955.8,EARLY_EXIT,25,3.25,81.25,40.0,119.78,22.76,1.2,11.98,11.51,207.22,-125.97,100000.0,99874.03,0.0,False

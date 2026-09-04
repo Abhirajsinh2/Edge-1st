@@ -1,0 +1,6 @@
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=0.2.0
+requests>=2.31.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
