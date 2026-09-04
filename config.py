@@ -10,7 +10,9 @@ payoff). No real orders are ever placed.
 
 # --- instruments ---
 INSTRUMENTS = ["NIFTY", "BANKNIFTY"]
-LOT_SIZES = {"NIFTY": 25, "BANKNIFTY": 15}
+# NSE revises these periodically -- verified against Upstox's live margin
+# calculator on 2026-09-04 (previously 25 / 15, now stale).
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30}
 
 # --- market data source: "upstox" (needs a daily login) or "yahoo" (free) ---
 # Override at runtime with env var EDGE1ST_DATA=yahoo|upstox
@@ -55,7 +57,12 @@ DAILY_TARGET_POINTS = TAKE_PROFIT_POINTS * 2   # stop trading an instrument once
 NO_TRADE_MINUTES_AFTER_OPEN = 15              # let the opening range settle
 
 # --- capital / compounding / one-time withdrawal (see capital_manager.py) ---
-CAPITAL = 100_000
+# Each instrument gets its own independent CapitalAccount of this size (see
+# run_week()). 100,000 was no longer enough to clear real margin for even 1
+# lot of either instrument once LOT_SIZES was corrected -- real Upstox margin
+# is ~Rs 1,76,862 (NIFTY) / ~Rs 1,83,395 (BANKNIFTY), verified live 2026-09-04.
+# 200,000 clears both with a buffer and was confirmed empirically to trade.
+CAPITAL = 200_000
 RISK_PCT_PER_TRADE = 0.01
 MAX_RISK_PCT = 0.03
 WITHDRAWAL_MULTIPLE = 2.0
