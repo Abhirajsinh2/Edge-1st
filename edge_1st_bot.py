@@ -374,11 +374,12 @@ h1{{margin:0 0 4px}} .meta{{color:#8b949e;margin-bottom:20px;font-size:.9rem}}
 .big{{font-size:1.8rem;font-weight:700}} .sub{{color:#8b949e;font-size:.8rem;margin-top:6px}}
 table{{width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:8px}}
 th,td{{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d}} th{{color:#8b949e}}
+a{{color:#58a6ff}}
 </style></head><body>
 <h1>Edge 1st &mdash; last 4 weeks</h1>
 <div class=meta>First Edge strategy (archived Strategy 5) &middot; 1-minute exit model &middot;
 full Zerodha F&amp;O costs &middot; {window_desc} &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
-paper only, no real orders</div>
+paper only, no real orders &middot; <a href="full-history.html">full-history compounding backtest &rarr;</a></div>
 <h2 style='color:#8b949e;font-size:1rem'>Last 4 weeks &mdash; total</h2>
 <div class=cards>{total_cards}</div>
 {week_sections}
