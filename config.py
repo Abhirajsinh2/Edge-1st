@@ -112,16 +112,15 @@ SLIPPAGE_RANGE_FRACTION = 0.10   # + this fraction of the fill bar's high-low ra
 # run will silently cover less history than requested -- not an error, just
 # fewer weeks on the dashboard until Upstox is reachable again.
 INTRADAY_LOOKBACK_DAYS = 28
-# Upstox's own rate limit for this endpoint class ("Other Standard APIs" --
-# historical/intraday candles, quotes) is 50 req/sec, 500/min, 2000/30min
-# (verified against their published docs, 2026-09-05) -- run_live()'s ~6
-# requests/poll (2 instruments x 3 endpoints) is nowhere near that ceiling.
-# The real limit is data granularity, not the API: these are 1-MINUTE
-# candles, so a new bar only exists once every 60s -- polling faster than
-# that doesn't get newer data, it just catches an already-closed bar sooner
-# (worst case: this many seconds of lag on an SL/TP/exit decision). 10s
-# keeps that lag low without spending quota on empty repolls. Going below
-# ~60s bar-to-bar latency requires switching from candle-polling to
-# Upstox's WebSocket Market Data Feed (tick-level LTP push) -- a different
-# architecture, not implemented here.
-POLL_INTERVAL_SECONDS = 10     # live mode only
+# run_live() now streams bars over Upstox's WebSocket Market Data Feed V3
+# (upstox_stream.py) instead of re-polling the REST candle endpoint --
+# Upstox's own community reports an ~8-20s backend lag on that REST endpoint
+# no matter how often it's called, which is why the switch was made instead
+# of just shortening this number further. With the feed connected, this is
+# just how often the loop re-checks its local in-memory buffer against the
+# strategy (no network call), so it can be short. REST candles (via
+# get_week_1min) fall under Upstox's "Other Standard APIs" rate limit --
+# 50 req/sec, 500/min, 2000/30min, verified against their docs 2026-09-05 --
+# and are still used, but now only every SEED_REFRESH_SECONDS (see
+# run_live()) for lookback history, not every loop tick.
+POLL_INTERVAL_SECONDS = 2     # live mode only

@@ -484,20 +484,58 @@ def run_week(only_symbol: str = None, days: int = None):
 
 
 def run_live():
-    """Forward paper loop — same 1-minute exit model, re-pulling fresh data each poll."""
+    """Forward paper loop — same 1-minute exit model. When the Upstox
+    WebSocket feed (upstox_stream.py) is available, the current 1-min bar is
+    updated live by the feed and this loop just re-evaluates the strategy
+    against it every POLL_INTERVAL_SECONDS -- no network call in that path.
+    Falls back to plain REST re-polling (the old behavior) if the feed
+    can't connect (no token, Yahoo data source, etc)."""
     print("Edge 1st LIVE paper loop — Ctrl+C to stop. No real orders.\n")
     accounts = {s: CapitalAccount(config.CAPITAL, "Rs ", config.WITHDRAWAL_MULTIPLE)
                 for s in config.INSTRUMENTS}
     seen = {s: set() for s in config.INSTRUMENTS}
+
+    use_stream = _SRC == "upstox"
+    if use_stream:
+        try:
+            import upstox_stream
+            upstox_stream.start()
+            if upstox_stream.wait_connected(timeout=10):
+                print("live feed: connected -- reacting to bars as they stream in.\n")
+            else:
+                print("live feed: did not connect within 10s -- "
+                      "continuing on REST polling only.\n")
+        except Exception as e:
+            print(f"live feed unavailable ({e}) -- continuing on REST polling only.\n")
+            use_stream = False
+
+    seed_cache: dict = {}
+    prevday_cache: dict = {}
+    cache_refreshed_at = 0.0
+    SEED_REFRESH_SECONDS = 300  # history/prev-day OHLC barely changes intraday
+
     poll = 0
     while True:
         poll += 1
+        now = _time.time()
+        if now - cache_refreshed_at > SEED_REFRESH_SECONDS:
+            for sym in config.INSTRUMENTS:
+                try:
+                    seed_cache[sym] = market.get_week_1min(sym, days=2)
+                    prevday_cache[sym] = market.prev_day_ohlc_map(sym)
+                except Exception as e:
+                    print(f"[poll {poll}] {sym} seed refresh ERROR: {e}")
+            cache_refreshed_at = now
+
         for sym in config.INSTRUMENTS:
             try:
-                df = market.get_week_1min(sym, days=2)
-                if df.empty:
+                if use_stream:
+                    df = upstox_stream.get_live_df(sym, seed=seed_cache.get(sym))
+                else:
+                    df = market.get_week_1min(sym, days=2)
+                if df is None or df.empty:
                     print(f"[poll {poll}] {sym}: no data"); continue
-                trades = replay_week(sym, df, accounts[sym], market.prev_day_ohlc_map(sym))
+                trades = replay_week(sym, df, accounts[sym], prevday_cache.get(sym, {}))
                 fresh = [t for t in trades if (t["entry_time"], t["exit_time"]) not in seen[sym]]
                 for t in fresh:
                     seen[sym].add((t["entry_time"], t["exit_time"]))

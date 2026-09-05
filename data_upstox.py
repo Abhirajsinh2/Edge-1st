@@ -76,6 +76,12 @@ def has_token() -> bool:
     return bool(_token())
 
 
+def token() -> str:
+    """Public accessor -- the WebSocket live feed (upstox_stream.py) needs
+    the raw token, unlike the REST calls below which work anonymously."""
+    return _token()
+
+
 def _headers() -> dict:
     return {"Accept": "application/json", "Authorization": f"Bearer {_token() or 'anonymous'}"}
 
