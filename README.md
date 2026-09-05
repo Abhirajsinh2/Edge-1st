@@ -2,7 +2,7 @@
 
 Runs **the first Edge strategy** (the archived `strategy_edge.py`, internally
 "Strategy 5") over the **last week of real 1-minute NIFTY / BANKNIFTY data**,
-applying **full Zerodha index-futures charges**.
+applying **full Upstox index-futures charges**.
 
 This is the config whose 2022–2026 walk-forward on the **1-minute exit model**
 returned **+₹5,67,297 (NIFTY) / +₹7,51,154 (BANKNIFTY)** net of all costs.
@@ -14,9 +14,9 @@ This bot keeps that model exactly:
 | Entry evaluation | 5-minute bar boundaries |
 | **Exit management** | **every 1-minute bar** — SL/TP fill at the exact level if that 1-min bar's range touches it; otherwise `should_exit_early()` exits at the 1-min close before price reaches the stop |
 | Stop / target | ATR(14) or 10-bar swing (whichever is tighter) · target = 3× risk |
-| Sizing | 1% risk of current equity, ~10× F&O leverage, NIFTY lot 25 / BANKNIFTY lot 15 |
-| Capital | ₹1,00,000 per instrument, compounding, one-time 2× withdrawal |
-| Costs | `zerodha_fno_costs.py` — brokerage + STT + exchange txn + SEBI + stamp duty + GST, every trade |
+| Sizing | 1% risk of current equity, ~10× F&O leverage, NIFTY lot 65 / BANKNIFTY lot 30 (NSE-revised; verified live against Upstox's margin calculator 2026-09-04) |
+| Capital | ₹2,00,000 per instrument, compounding, one-time 2× withdrawal (raised from ₹1,00,000 — that couldn't clear real margin for even 1 lot at the corrected sizes) |
+| Costs | `upstox_fno_costs.py` — brokerage + STT + exchange txn + SEBI + stamp duty + GST, every trade (real Upstox rate card, not Zerodha's — verified 2026-09-05) |
 | Orders | **none — paper only** |
 
 ## Market data — Upstox (default), Yahoo (fallback)
@@ -62,14 +62,18 @@ Writes `edge_1st_trades_<SYM>.csv` (full per-trade cost breakdown) and
 
 ## Notes / limits
 
-- Both vendors cap 1-minute history near 1 week; Upstox typically returns
-  ~5 trading days, Yahoo ~7 calendar days. Previous-session Camarilla pivots
-  come from a separate daily pull, so the first day in the window still trades.
+- Yahoo hard-caps 1-minute history at 7 calendar days. Upstox's v3
+  historical-candle API caps each *request* at ~31 days but the underlying
+  archive goes back years -- `full_history_backtest.py` chains consecutive
+  ~29-day requests to assemble multi-month/year continuous history; the live
+  4-week dashboard (`edge_1st_bot.py`) just uses one request since it fits
+  under the cap. Previous-session Camarilla pivots come from a separate
+  daily pull (no such cap), so the first day in any window still trades.
 - NSE indices report **zero volume**, so the strategy's volume-confirmation
   filter auto-disables (same as in the original backtests). Vendor OHLC prints
   differ slightly, so Upstox vs Yahoo runs won't match trade-for-trade.
 - Self-contained: `strategy.py`, `indicators.py`, `capital_manager.py`,
-  `zerodha_fno_costs.py` are copies. Nothing here imports from the parent
+  `upstox_fno_costs.py` are copies. Nothing here imports from the parent
   project or writes outside this folder.
 - **Not financial advice, not a proven edge.** The +₹5–7 L headline depends
   entirely on the 1-minute exit assumption; on a 5-minute exit model the same

@@ -152,7 +152,7 @@ th,td{{text-align:left;padding:5px 8px;border-bottom:1px solid #21262d}} th{{col
 <h1>Edge 1st &mdash; full history, compounding</h1>
 <div class=meta>Every trade sizes off the CURRENT account balance (1% risk + margin cap) &middot;
 no capital added or removed mid-run, one CapitalAccount per instrument compounds start to finish &middot;
-full Zerodha F&amp;O costs &middot; generated {dt.now():%Y-%m-%d %H:%M} &middot; paper only, no real orders</div>
+full Upstox F&amp;O costs &middot; generated {dt.now():%Y-%m-%d %H:%M} &middot; paper only, no real orders</div>
 <div class=cards>{total_cards}{combined_card}</div>
 <div class=chart-card>
 <h2 style='color:#8b949e;font-size:1rem;margin-top:0'>Equity curve (per trade, compounding)</h2>

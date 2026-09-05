@@ -13,8 +13,8 @@ as the backtest that produced the winning numbers:
       bar's close, BEFORE price has to travel all the way to the stop
     * new entries are only evaluated on 5-minute bar boundaries
 
-Full Zerodha index-futures charges (brokerage + STT + exchange txn + SEBI +
-stamp duty + GST) are applied to every trade via zerodha_fno_costs.py.
+Full Upstox index-futures charges (brokerage + STT + exchange txn + SEBI +
+stamp duty + GST) are applied to every trade via upstox_fno_costs.py.
 Capital compounds at 1% risk/trade with the one-time 2x withdrawal
 (capital_manager.py). NO REAL ORDERS ARE EVER PLACED.
 
@@ -45,7 +45,7 @@ import pandas as pd
 import config
 import strategy as strat
 from capital_manager import CapitalAccount, size_by_risk
-from zerodha_fno_costs import calculate_futures_costs
+from upstox_fno_costs import calculate_futures_costs
 
 # --- pick the market-data source: upstox (default) or yahoo ---------------
 _SRC = os.getenv("EDGE1ST_DATA", getattr(config, "DATA_SOURCE", "upstox")).lower()
@@ -378,7 +378,7 @@ a{{color:#58a6ff}}
 </style></head><body>
 <h1>Edge 1st &mdash; last 4 weeks</h1>
 <div class=meta>First Edge strategy (archived Strategy 5) &middot; 1-minute exit model &middot;
-full Zerodha F&amp;O costs &middot; {window_desc} &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
+full Upstox F&amp;O costs &middot; {window_desc} &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
 paper only, no real orders &middot; <a href="full-history.html">full-history compounding backtest &rarr;</a></div>
 <h2 style='color:#8b949e;font-size:1rem'>Last 4 weeks &mdash; total</h2>
 <div class=cards>{total_cards}</div>
