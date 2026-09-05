@@ -90,6 +90,20 @@ MARKET_CLOSE = "15:30"
 CAS_FREEZE_TIME = "15:15"
 NO_TRADE_MINUTES_BEFORE_CAS_FREEZE = 15   # last new entry allowed at 15:00
 
+# --- execution realism: slippage on market-speed fills ---
+# SL, EARLY_EXIT, PRE_CLOSE_FLATTEN exits and signal entries are all
+# market-speed orders in real trading -- the backtest previously filled them
+# at the exact trigger/decision price with no regard for how fast price was
+# moving on that bar, which is optimistic (worst on a big, fast candle, near
+# nothing on a small, calm one). TAKE PROFIT is left unslipped -- it behaves
+# like a limit order, filled at your price or better.
+# These are ESTIMATES, not verified data (unlike LOT_SIZES/CAPITAL/fees
+# above, which were checked against live Upstox figures) -- there is no
+# execution log to calibrate against. Floor is a rough real-world NIFTY/
+# BANKNIFTY futures figure; the range fraction scales it up on fast bars.
+ASSUMED_SLIPPAGE_POINTS = {"NIFTY": 1.0, "BANKNIFTY": 2.0}   # floor, per fill
+SLIPPAGE_RANGE_FRACTION = 0.10   # + this fraction of the fill bar's high-low range
+
 # --- how much market history the run pulls ---
 # 28 days = last 4 calendar weeks, classified weekly on the dashboard.
 # Upstox's historical-candle API (the default DATA_SOURCE) has no such cap and

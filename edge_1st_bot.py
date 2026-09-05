@@ -120,6 +120,15 @@ def _must_force_flatten(ts) -> bool:
     return (ts.hour * 60 + ts.minute) == _CAS_FREEZE_MIN - 1
 
 
+def _slippage(symbol: str, bar) -> float:
+    """Points of adverse slippage for a market-speed fill on this bar --
+    a per-instrument floor plus a fraction of the bar's own high-low range,
+    so a fast/violent bar costs more than a quiet one."""
+    floor = config.ASSUMED_SLIPPAGE_POINTS.get(symbol, 1.0)
+    bar_range = float(bar["high"]) - float(bar["low"])
+    return max(floor, bar_range * config.SLIPPAGE_RANGE_FRACTION)
+
+
 def _costs(direction: str, entry: float, exit_: float, qty: int) -> dict:
     if direction == "LONG":
         return calculate_futures_costs(buy_price=entry, sell_price=exit_, qty=qty)
@@ -184,9 +193,13 @@ def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
                     reason = "PRE_CLOSE_FLATTEN"
 
                 if reason is not None:
-                    exit_price = (open_pos.stop_loss if reason == "SL"
-                                  else open_pos.take_profit if reason == "TP"
-                                  else float(bar["close"]))
+                    if reason == "TP":
+                        exit_price = open_pos.take_profit
+                    else:
+                        raw_exit = open_pos.stop_loss if reason == "SL" else float(bar["close"])
+                        slip = _slippage(symbol, bar)
+                        exit_price = (raw_exit - slip if open_pos.direction == "LONG"
+                                      else raw_exit + slip)
                     pts = ((exit_price - open_pos.entry_price) if open_pos.direction == "LONG"
                            else (open_pos.entry_price - exit_price))
                     qty = open_pos.quantity
@@ -235,8 +248,9 @@ def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
             if signal not in (strat.Signal.LONG, strat.Signal.SHORT):
                 continue
 
-            ep = float(bar["close"])
             direction = "LONG" if signal == strat.Signal.LONG else "SHORT"
+            slip = _slippage(symbol, bar)
+            ep = float(bar["close"]) + (slip if direction == "LONG" else -slip)
             sl, tp = strat.compute_stop_and_target(de, ep, direction)
             if (direction == "LONG" and sl >= ep) or (direction == "SHORT" and sl <= ep):
                 continue
