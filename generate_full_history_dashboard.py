@@ -148,7 +148,7 @@ a{{color:#58a6ff}}
 table{{width:100%;border-collapse:collapse;font-size:.8rem;margin-bottom:8px}}
 th,td{{text-align:left;padding:5px 8px;border-bottom:1px solid #21262d}} th{{color:#8b949e}}
 </style></head><body>
-<p><a href="index.html">&larr; back to last-4-weeks dashboard</a></p>
+<p><a href="index.html">&larr; back to last-4-weeks dashboard</a> &middot; <a href="today.html">today &rarr;</a></p>
 <h1>Edge 1st &mdash; full history, compounding</h1>
 <div class=meta>Every trade sizes off the CURRENT account balance (1% risk + margin cap) &middot;
 no capital added or removed mid-run, one CapitalAccount per instrument compounds start to finish &middot;

@@ -138,7 +138,14 @@ def _costs(direction: str, entry: float, exit_: float, qty: int) -> dict:
 # ── core: 1-minute-exit replay over one instrument's week ──────────────────
 
 def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
-                prev_ohlc_map: dict) -> list:
+                prev_ohlc_map: dict, signals: list = None) -> list:
+    """`signals`, if given, is appended to with every LONG/SHORT the
+    strategy actually generated -- including ones that did not turn into a
+    trade (invalid stop, or position sizing rounded to 0 lots). This is
+    evaluated only once the daily-trade-cap / daily-target / no-trade-window
+    gates already pass, same as a real entry would be -- it does not
+    capture a signal the strategy would have fired had those gates not
+    blocked evaluation in the first place."""
     lot_size = config.LOT_SIZES.get(symbol, 1)
     df_1m = df_1m.sort_index()
     df_entry_full = _resample(df_1m, config.ENTRY_TIMEFRAME_MIN)
@@ -249,17 +256,30 @@ def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
                 continue
 
             direction = "LONG" if signal == strat.Signal.LONG else "SHORT"
+            sig_record = {"date": day, "instrument": symbol, "time": ts, "direction": direction}
             slip = _slippage(symbol, bar)
             ep = float(bar["close"]) + (slip if direction == "LONG" else -slip)
             sl, tp = strat.compute_stop_and_target(de, ep, direction)
             if (direction == "LONG" and sl >= ep) or (direction == "SHORT" and sl <= ep):
+                sig_record["entered"] = False
+                sig_record["skip_reason"] = "invalid_stop"
+                if signals is not None:
+                    signals.append(sig_record)
                 continue
             qty = size_by_risk(account.equity, ep, sl, RISK_PCT, LEVERAGE,
                                lot_size=lot_size, max_risk_pct=MAX_RISK_PCT)
             if qty < 1:
+                sig_record["entered"] = False
+                sig_record["skip_reason"] = "position_size_zero"
+                if signals is not None:
+                    signals.append(sig_record)
                 continue
             open_pos = Position(direction, ep, ts, sl, tp, qty)
             trades_today += 1
+            sig_record["entered"] = True
+            sig_record["skip_reason"] = None
+            if signals is not None:
+                signals.append(sig_record)
 
     return trades
 
@@ -362,24 +382,59 @@ def _card_html(label: str, agg: dict) -> str:
             f"gross Rs {_fmt(agg['gross'])} · charges Rs {agg['charges']:,.0f}</div></div>")
 
 
-def _trade_rows_html(trades: list) -> str:
+def _time_fmt(ts, compact: bool) -> str:
+    """compact=True (single-day pages): just HH:MM:SS. Otherwise (tables
+    spanning multiple days): date + time, dropping the always-:00 seconds
+    and always-+05:30 offset that clutter the multi-day view."""
+    return f"{ts:%H:%M:%S}" if compact else f"{ts:%Y-%m-%d %H:%M}"
+
+
+def _trade_rows_html(trades: list, compact: bool = False) -> str:
     rows = ""
     for t in trades:
         col = "#43D9AD" if t["net_pnl_inr"] >= 0 else "#f7768e"
         rows += (f"<tr><td>{t['instrument']}</td><td>{t['direction']}</td>"
-                 f"<td>{t['entry_time']}</td><td>{t['entry_price']}</td>"
-                 f"<td>{t['exit_time']}</td><td>{t['exit_price']}</td>"
+                 f"<td>{_time_fmt(t['entry_time'], compact)}</td><td>{t['entry_price']}</td>"
+                 f"<td>{_time_fmt(t['exit_time'], compact)}</td><td>{t['exit_price']}</td>"
                  f"<td>{t['exit_reason']}</td><td>{t['quantity']}</td>"
                  f"<td style='color:{col}'>{t['net_pnl_inr']:+,.0f}</td></tr>")
     return rows
 
 
-def _trade_table_html(trades: list) -> str:
+def _trade_table_html(trades: list, compact: bool = False, empty_msg: str = "No trades this week.") -> str:
     if not trades:
-        return "<p style='color:#8b949e;font-size:.85rem'>No trades this week.</p>"
+        return f"<p style='color:#8b949e;font-size:.85rem'>{empty_msg}</p>"
     return (f"<table><tr><th>Sym</th><th>Dir</th><th>Entry time</th><th>Entry</th>"
             f"<th>Exit time</th><th>Exit</th><th>Reason</th><th>Qty</th><th>Net Rs</th></tr>"
-            f"{_trade_rows_html(trades)}</table>")
+            f"{_trade_rows_html(trades, compact)}</table>")
+
+
+def _signal_table_html(signals: list) -> str:
+    if not signals:
+        return "<p style='color:#8b949e;font-size:.85rem'>No signals generated today.</p>"
+    rows = ""
+    for s in sorted(signals, key=lambda x: x["time"]):
+        if s["entered"]:
+            status, col = "entered", "#43D9AD"
+        else:
+            status, col = s["skip_reason"], "#8b949e"
+        rows += (f"<tr><td>{s['time']:%H:%M:%S}</td><td>{s['instrument']}</td>"
+                 f"<td>{s['direction']}</td><td style='color:{col}'>{status}</td></tr>")
+    return (f"<table><tr><th>Time</th><th>Sym</th><th>Dir</th><th>Outcome</th></tr>"
+            f"{rows}</table>")
+
+
+def _ohlc_card_html(symbol: str, o: dict) -> str:
+    if o is None:
+        return f"<div class=card><h2>{symbol}</h2><div class=sub>no data today</div></div>"
+    chg = o["last"] - o["prev_close"]
+    pct = (chg / o["prev_close"] * 100) if o["prev_close"] else 0.0
+    col = "#43D9AD" if chg >= 0 else "#f7768e"
+    return (f"<div class=card><h2>{symbol}</h2>"
+            f"<div class=big style='color:{col}'>{o['last']:,.2f}</div>"
+            f"<div class=sub style='color:{col}'>{chg:+,.2f} ({pct:+.2f}%) vs prev close</div>"
+            f"<div class=sub>open {o['open']:,.2f} &middot; high {o['high']:,.2f} &middot; "
+            f"low {o['low']:,.2f}</div></div>")
 
 
 def write_dashboard(rows: list, all_trades: dict, window_desc: str, weekly: list = None):
@@ -412,12 +467,60 @@ a{{color:#58a6ff}}
 <h1>Edge 1st &mdash; last 4 weeks</h1>
 <div class=meta>First Edge strategy (archived Strategy 5) &middot; 1-minute exit model &middot;
 full Upstox F&amp;O costs &middot; {window_desc} &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
-paper only, no real orders &middot; <a href="full-history.html">full-history compounding backtest &rarr;</a></div>
+paper only, no real orders &middot; <a href="today.html">today &rarr;</a> &middot;
+<a href="full-history.html">full-history compounding backtest &rarr;</a></div>
 <h2 style='color:#8b949e;font-size:1rem'>Last 4 weeks &mdash; total</h2>
 <div class=cards>{total_cards}</div>
 {week_sections}
 </body></html>"""
     path = "edge_1st_dashboard.html"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return path
+
+
+def write_today_page(today_date, ohlc: dict, today_trades: dict, today_signals: dict):
+    """The single most-recent trading day covered by this run: how
+    NIFTY/BANKNIFTY moved, every signal the strategy generated (entered or
+    not, see replay_week's docstring for exactly what that does and doesn't
+    capture), and every trade actually taken -- with plain HH:MM:SS times
+    so it's clear when each one was placed. Regenerated on the same
+    schedule as the main dashboard (see .github/workflows), so this always
+    reflects the most recent run, not necessarily today's calendar date if
+    markets were closed since."""
+    ohlc_cards = "".join(_ohlc_card_html(sym, ohlc.get(sym)) for sym in config.INSTRUMENTS)
+
+    sections = ""
+    for sym in config.INSTRUMENTS:
+        sections += (
+            f"<h2 style='color:#8b949e;font-size:1rem;margin-top:32px'>{sym}</h2>"
+            f"<h3 style='color:#8b949e;font-size:.85rem;margin:16px 0 4px'>Signals generated</h3>"
+            f"{_signal_table_html(today_signals.get(sym, []))}"
+            f"<h3 style='color:#8b949e;font-size:.85rem;margin:16px 0 4px'>Trades taken</h3>"
+            f"{_trade_table_html(today_trades.get(sym, []), compact=True, empty_msg='No trades today.')}"
+        )
+
+    html = f"""<!doctype html><html><head><meta charset=UTF-8>
+<title>Edge 1st — today</title><style>
+body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:24px}}
+h1{{margin:0 0 4px}} .meta{{color:#8b949e;margin-bottom:20px;font-size:.9rem}}
+.cards{{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}}
+.card{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px 20px;min-width:220px}}
+.card h2{{margin:0 0 8px;font-size:1rem;color:#8b949e}}
+.big{{font-size:1.8rem;font-weight:700}} .sub{{color:#8b949e;font-size:.8rem;margin-top:6px}}
+table{{width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:8px}}
+th,td{{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d}} th{{color:#8b949e}}
+a{{color:#58a6ff}}
+</style></head><body>
+<h1>Edge 1st &mdash; today</h1>
+<div class=meta>{today_date:%A, %Y-%m-%d}, IST &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
+refreshed on the same schedule as the main dashboard &middot; paper only, no real orders &middot;
+<a href="edge_1st_dashboard.html">last 4 weeks &rarr;</a> &middot;
+<a href="full-history.html">full-history compounding backtest &rarr;</a></div>
+<div class=cards>{ohlc_cards}</div>
+{sections}
+</body></html>"""
+    path = "today.html"
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     return path
@@ -431,7 +534,10 @@ def run_week(only_symbol: str = None, days: int = None):
     days = config.INTRADAY_LOOKBACK_DAYS if days is None else min(max(int(days), 1), config.INTRADAY_LOOKBACK_DAYS)
     syms = [only_symbol] if only_symbol else list(config.INSTRUMENTS)
     rows, all_trades = [], {}
+    all_signals: dict = {}
+    today_ohlc: dict = {}
     win_lo = win_hi = None
+    latest_date = None
     for sym in syms:
         print(f"\nfetching last {days} days of 1-min {sym} ...")
         df = market.get_week_1min(sym, days)
@@ -441,16 +547,31 @@ def run_week(only_symbol: str = None, days: int = None):
             # older window's trades when this run's feed is empty.
             write_csv(sym, [])
             all_trades[sym] = []
+            all_signals[sym] = []
             continue
         w0, w1 = df.index.min(), df.index.max()
         win_lo = w0 if win_lo is None else min(win_lo, w0)
         win_hi = w1 if win_hi is None else max(win_hi, w1)
         print(f"  {len(df):,} 1-min bars   {w0}  ->  {w1}")
         account = CapitalAccount(config.CAPITAL, "Rs ", config.WITHDRAWAL_MULTIPLE)
-        trades = replay_week(sym, df, account, market.prev_day_ohlc_map(sym))
+        prev_map = market.prev_day_ohlc_map(sym)
+        sig_list: list = []
+        trades = replay_week(sym, df, account, prev_map, signals=sig_list)
         rows.append(summarize(sym, trades, account))
         all_trades[sym] = trades
+        all_signals[sym] = sig_list
         write_csv(sym, trades)
+
+        sym_last_date = df.index.max().date()
+        latest_date = sym_last_date if latest_date is None else max(latest_date, sym_last_date)
+        day_bars = df[df.index.date == sym_last_date]
+        if not day_bars.empty:
+            prev_close = prev_map.get(sym_last_date, {}).get("close")
+            today_ohlc[sym] = {
+                "open": float(day_bars.iloc[0]["open"]), "high": float(day_bars["high"].max()),
+                "low": float(day_bars["low"].min()), "last": float(day_bars.iloc[-1]["close"]),
+                "prev_close": prev_close if prev_close is not None else float(day_bars.iloc[0]["open"]),
+            }
 
     if not rows:
         print("\nNothing to report.")
@@ -476,6 +597,12 @@ def run_week(only_symbol: str = None, days: int = None):
     desc = f"{win_lo:%Y-%m-%d} to {win_hi:%Y-%m-%d}" if win_lo is not None else f"last {days} calendar days"
     dash = write_dashboard(rows, all_trades, desc, weekly=weekly)
     print(f"\nwrote {dash}  +  edge_1st_trades_<SYM>.csv")
+
+    if latest_date is not None:
+        today_trades = {sym: [t for t in all_trades.get(sym, []) if t["date"] == latest_date] for sym in syms}
+        today_signals = {sym: [s for s in all_signals.get(sym, []) if s["date"] == latest_date] for sym in syms}
+        today_page = write_today_page(latest_date, today_ohlc, today_trades, today_signals)
+        print(f"wrote {today_page}")
     if os.getenv("EDGE1ST_NO_BROWSER") != "1":
         try:
             webbrowser.open(os.path.abspath(dash))
