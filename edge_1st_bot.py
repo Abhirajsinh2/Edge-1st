@@ -100,8 +100,24 @@ def _resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     return out.dropna()
 
 
+_CAS_FREEZE_MIN = int(config.CAS_FREEZE_TIME[:2]) * 60 + int(config.CAS_FREEZE_TIME[3:])
+
+
 def _entries_allowed(ts) -> bool:
-    return (ts.hour * 60 + ts.minute) >= _OPEN_MIN + config.NO_TRADE_MINUTES_AFTER_OPEN
+    minute_of_day = ts.hour * 60 + ts.minute
+    if minute_of_day < _OPEN_MIN + config.NO_TRADE_MINUTES_AFTER_OPEN:
+        return False
+    if minute_of_day >= _CAS_FREEZE_MIN - config.NO_TRADE_MINUTES_BEFORE_CAS_FREEZE:
+        return False
+    return True
+
+
+def _must_force_flatten(ts) -> bool:
+    """The last bar before the CAS freeze -- still real, continuous price
+    data, so a genuine fill is possible here. One minute later, continuous
+    trading has already halted (verified in our own 1-min data: the bar at
+    CAS_FREEZE_TIME is already frozen O=H=L=C)."""
+    return (ts.hour * 60 + ts.minute) == _CAS_FREEZE_MIN - 1
 
 
 def _costs(direction: str, entry: float, exit_: float, qty: int) -> dict:
@@ -163,6 +179,9 @@ def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
                     de = df_entry_full.iloc[max(0, pos_e - ENTRY_LOOKBACK_BARS):pos_e]
                     if len(de) and strat.should_exit_early(de, open_pos.direction):
                         reason = "EARLY_EXIT"
+
+                if reason is None and _must_force_flatten(ts):
+                    reason = "PRE_CLOSE_FLATTEN"
 
                 if reason is not None:
                     exit_price = (open_pos.stop_loss if reason == "SL"

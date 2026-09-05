@@ -71,7 +71,24 @@ ASSUMED_MARGIN_LEVERAGE = 10.0   # ~10x SPAN+exposure for NIFTY/BANKNIFTY future
 # --- session (NSE, IST) ---
 MARKET_TZ = "Asia/Kolkata"
 MARKET_OPEN = "09:15"
+# This is the exchange's nominal/official close -- NOT when continuous
+# trading actually stops. Do not use it for intraday risk-management
+# cutoffs; see CAS_FREEZE_TIME below.
 MARKET_CLOSE = "15:30"
+
+# --- SEBI Closing Auction Session (CAS), effective 2026-08-03 ---
+# Continuous trading for CAS-eligible stocks (which includes NIFTY/BANKNIFTY's
+# heavyweight constituents, and therefore distorts the index's own printed
+# value too) halts at 15:15: price freezes dead flat, then jumps once at a
+# single auction-clearing trade around 15:29-15:30. No stop-loss, target, or
+# early-exit can execute during the freeze -- verified directly against our
+# own 1-minute Upstox data (2026-08-07 and 2026-08-13 NIFTY: 14 minutes of
+# an unchanged O=H=L=C candle, then one candle jumping 13-42 points). Two
+# real backtested trades landed exits inside that frozen window and were
+# quantifiably mispriced as a result -- both showed a smaller/backwards
+# result once corrected against the real achievable auction price.
+CAS_FREEZE_TIME = "15:15"
+NO_TRADE_MINUTES_BEFORE_CAS_FREEZE = 15   # last new entry allowed at 15:00
 
 # --- how much market history the run pulls ---
 # 28 days = last 4 calendar weeks, classified weekly on the dashboard.
