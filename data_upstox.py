@@ -36,7 +36,9 @@ TZ = ZoneInfo(config.MARKET_TZ)
 V3 = "https://api.upstox.com/v3/historical-candle"
 _HERE = Path(__file__).parent
 
-_CACHE_TTL = 90.0
+# Kept below config.POLL_INTERVAL_SECONDS so a faster live poll actually
+# gets fresher candles instead of just re-serving the same cached response.
+_CACHE_TTL = 8.0
 _cache: dict = {}
 
 
