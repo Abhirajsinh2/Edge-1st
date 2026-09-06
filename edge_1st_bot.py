@@ -266,7 +266,7 @@ def replay_week(symbol: str, df_1m: pd.DataFrame, account: CapitalAccount,
                 if signals is not None:
                     signals.append(sig_record)
                 continue
-            qty = size_by_risk(account.equity, ep, sl, RISK_PCT, LEVERAGE,
+            qty = size_by_risk(account.sizing_equity, ep, sl, RISK_PCT, LEVERAGE,
                                lot_size=lot_size, max_risk_pct=MAX_RISK_PCT)
             if qty < 1:
                 sig_record["entered"] = False
@@ -468,7 +468,8 @@ a{{color:#58a6ff}}
 <div class=meta>First Edge strategy (archived Strategy 5) &middot; 1-minute exit model &middot;
 full Upstox F&amp;O costs &middot; {window_desc} &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
 paper only, no real orders &middot; <a href="today.html">today &rarr;</a> &middot;
-<a href="full-history.html">full-history compounding backtest &rarr;</a></div>
+<a href="full-history.html">full-history compounding backtest &rarr;</a> &middot;
+<a href="fixed-capital.html">fixed-stake (no reinvest) backtest &rarr;</a></div>
 <h2 style='color:#8b949e;font-size:1rem'>Last 4 weeks &mdash; total</h2>
 <div class=cards>{total_cards}</div>
 {week_sections}
@@ -516,7 +517,8 @@ a{{color:#58a6ff}}
 <div class=meta>{today_date:%A, %Y-%m-%d}, IST &middot; generated {_dt.now():%Y-%m-%d %H:%M} &middot;
 refreshed on the same schedule as the main dashboard &middot; paper only, no real orders &middot;
 <a href="edge_1st_dashboard.html">last 4 weeks &rarr;</a> &middot;
-<a href="full-history.html">full-history compounding backtest &rarr;</a></div>
+<a href="full-history.html">full-history compounding backtest &rarr;</a> &middot;
+<a href="fixed-capital.html">fixed-stake (no reinvest) backtest &rarr;</a></div>
 <div class=cards>{ohlc_cards}</div>
 {sections}
 </body></html>"""

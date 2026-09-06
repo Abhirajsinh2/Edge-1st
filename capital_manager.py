@@ -28,10 +28,16 @@ from __future__ import annotations
 
 
 class CapitalAccount:
-    def __init__(self, initial: float, currency: str = "$", withdrawal_multiple: float = 2.0):
+    def __init__(self, initial: float, currency: str = "$", withdrawal_multiple: float = 2.0,
+                 compound: bool = True):
         self.initial = float(initial)
         self.currency = currency
         self.withdrawal_multiple = float(withdrawal_multiple)
+        # compound=False -> a FIXED-STAKE account: realised P&L still accrues to
+        # `equity` (so the reporting curve moves), but position sizing is pinned
+        # to the ORIGINAL stake via `sizing_equity`, and the one-time 2x
+        # withdrawal is disabled. Profit is never put back to work.
+        self.compound = bool(compound)
 
         self.equity = float(initial)      # working balance - compounds, used for sizing
         self.peak = float(initial)        # high-water mark of the working balance
@@ -56,7 +62,7 @@ class CapitalAccount:
             self.peak = self.equity
 
         triggered = False
-        if (not self.withdrawal_done
+        if (self.compound and not self.withdrawal_done
                 and self.equity >= self.withdrawal_multiple * self.initial):
             self.withdrawn = self.initial
             self.equity -= self.initial
@@ -68,10 +74,20 @@ class CapitalAccount:
     # ------------------------------------------------------------------ #
 
     @property
+    def sizing_equity(self) -> float:
+        """The balance position sizing is allowed to see. Compound mode: the
+        live working balance, so profits ride. Fixed-stake mode: always the
+        original stake, so profits are never reinvested."""
+        return self.equity if self.compound else self.initial
+
+    @property
     def reinvested_profit(self) -> float:
         """Profit currently at work in the market. Before the withdrawal this
         is just the running gain; after it, the whole working balance is
-        profit (the original stake was pulled out)."""
+        profit (the original stake was pulled out). Always 0 in fixed-stake
+        mode -- nothing is reinvested."""
+        if not self.compound:
+            return 0.0
         return self.equity - (self.initial - self.withdrawn)
 
     @property
@@ -88,6 +104,7 @@ class CapitalAccount:
     def snapshot(self) -> dict:
         return {
             "currency": self.currency,
+            "compound": self.compound,
             "initial": round(self.initial, 2),
             "equity": round(self.equity, 2),
             "peak": round(self.peak, 2),
