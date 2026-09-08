@@ -3,13 +3,12 @@ name: Update Edge 1st dashboard
 on:
   workflow_dispatch:
   schedule:
-    # NSE session is 09:15-15:30 IST. Start ~14 min before the open and
-    # keep refreshing until ~30 min after the close: 09:00-16:00 IST
-    # (UTC 03:30-10:30), every 15 minutes, weekdays only.
+    # Refresh every 15 minutes across the NSE weekday session: 09:00–15:45 IST.
+    # GitHub cron runs in UTC (IST = UTC+5:30), so this is 03:30–10:15 UTC, Mon–Fri.
     # GitHub may start scheduled jobs a few minutes late.
     - cron: "30,45 3 * * 1-5"
     - cron: "*/15 4-9 * * 1-5"
-    - cron: "0,15,30 10 * * 1-5"
+    - cron: "0,15 10 * * 1-5"
 
 permissions:
   contents: write
